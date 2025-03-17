@@ -4,6 +4,7 @@ from telegram.ext import filters
 import sqlite3
 import os
 import time
+import textwrap
 from os import environ
 from datetime import datetime, timedelta
 
@@ -51,7 +52,7 @@ def update_user_stats(user_id):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_user_stats(update.message.from_user.id)
-    welcome_text = """
+    welcome_text = textwrap.dedent("""
     🌟 *Добро пожаловать в бота для обмена скидочными картами!* 🌟
     
     📸 *Как это работает?*
@@ -70,7 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - `/list` - показать список всех карт.
     
     🚀 *Начните прямо сейчас!* Отправьте мне фотографию вашей скидочной карты.
-    """
+    """).strip()
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,7 +207,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ''')
     avg_cards_per_active_user = cursor.fetchone()[0] or 0
 
-    stats_text = f"""
+    stats_text = textwrap.dedent(f"""
     📊 *Статистика использования бота:*
     
     👤 *Всего пользователей:* {total_users}
@@ -221,15 +222,16 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ⏳ *Среднее время между первым и последним использованием:* {avg_usage_duration:.2f} дней
     
     🏆 *Топ-5 популярных карт:*
-    """
+    """).strip()
 
     for i, (name, count) in enumerate(top_cards, start=1):
         stats_text += f"  {i}. {name} (выбрана {count} раз)\n"
 
-    stats_text += f"""
+    stats_text += textwrap.dedent(f"""
     📅 *Карт загружено за последние 7 дней:* {cards_last_7_days}
     📦 *Среднее количество карт на активного пользователя:* {avg_cards_per_active_user:.2f}
-    """
+    """).strip()
+
     await update.message.reply_text(stats_text, parse_mode="Markdown")
 
     conn.close()
