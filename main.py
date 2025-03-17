@@ -186,10 +186,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     avg_usage_duration = cursor.fetchone()[0] or 0
 
     cursor.execute('''
-        SELECT c.name, cs.selection_count 
+        SELECT c.name, COALESCE(cs.selection_count, 0) as selection_count 
         FROM cards c
-        JOIN card_stats cs ON c.id = cs.card_id
-        ORDER BY cs.selection_count DESC
+        LEFT JOIN card_stats cs ON c.id = cs.card_id
+        ORDER BY selection_count DESC
         LIMIT 5
     ''')
     top_cards = cursor.fetchall()
@@ -244,8 +244,17 @@ async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
     conn = sqlite3.connect('discount_cards.db')
     cursor = conn.cursor()
+
+    cursor.execute('''
+        INSERT OR IGNORE INTO card_stats (card_id) VALUES (?)
+    ''', (card_id,))
+    cursor.execute('''
+        UPDATE card_stats SET selection_count = selection_count + 1 WHERE card_id = ?
+    ''', (card_id,))
+
     cursor.execute('SELECT photo FROM cards WHERE id = ?', (card_id,))
     card = cursor.fetchone()
+    conn.commit()
     conn.close()
 
     if not card:
