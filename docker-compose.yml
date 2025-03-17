@@ -8,3 +8,6 @@ services:
       - app-data:/app
     environment:
       - BOT_TOKEN=YOUR_BOT_TOKEN
+
+volumes:
+  app-data:
