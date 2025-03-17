@@ -225,7 +225,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """).strip()
 
     for i, (name, count) in enumerate(top_cards, start=1):
-        stats_text += f"  {i}. {name} (выбрана {count} раз)\n"
+        stats_text += f"\n  {i}. {name} (выбрана {count} раз)\n"
 
     stats_text += textwrap.dedent(f"""
     📅 *Карт загружено за последние 7 дней:* {cards_last_7_days}
@@ -244,17 +244,16 @@ async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
     conn = sqlite3.connect('discount_cards.db')
     cursor = conn.cursor()
-
     cursor.execute('''
-        INSERT OR IGNORE INTO card_stats (card_id) VALUES (?)
-    ''', (card_id,))
+           INSERT OR IGNORE INTO card_stats (card_id) VALUES (?)
+       ''', (card_id,))
     cursor.execute('''
-        UPDATE card_stats SET selection_count = selection_count + 1 WHERE card_id = ?
-    ''', (card_id,))
+           UPDATE card_stats SET selection_count = selection_count + 1 WHERE card_id = ?
+       ''', (card_id,))
+    conn.commit()
 
     cursor.execute('SELECT photo FROM cards WHERE id = ?', (card_id,))
     card = cursor.fetchone()
-    conn.commit()
     conn.close()
 
     if not card:

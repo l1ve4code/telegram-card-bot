@@ -7,8 +7,6 @@ services:
       - BOT_TOKEN=YOUR_BOT_TOKEN
       - ADMIN_PASSWORD=your_admin_password
     volumes:
-      - app-data:/app
+      - ./photos:/app/photos
+      - ./discount_cards.db:/app/discount_cards.db
     restart: unless-stopped
-
-volumes:
-  app-data:
