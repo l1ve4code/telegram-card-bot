@@ -2,12 +2,11 @@ services:
   discount-card-bot:
     container_name: discount-card-bot
     build: .
-    restart: unless-stopped
     network_mode: host
-    volumes:
-      - app-data:/app
     environment:
       - BOT_TOKEN=YOUR_BOT_TOKEN
-
-volumes:
-  app-data:
+      - ADMIN_PASSWORD=your_admin_password
+    volumes:
+      - ./photos:/app/photos
+      - ./discount_cards.db:/app/discount_cards.db
+    restart: unless-stopped

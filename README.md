@@ -32,13 +32,15 @@ Replace the placeholder with your Telegram Bot token:
 ```yaml
 services:
   discount-card-bot:
-    build: .
     container_name: discount-card-bot
+    build: .
     network_mode: host
-    volumes:
-      - app-data:/app
     environment:
       - BOT_TOKEN=YOUR_BOT_TOKEN
+      - ADMIN_PASSWORD=your_admin_password
+    volumes:
+      - ./photos:/app/photos
+      - ./discount_cards.db:/app/discount_cards.db
     restart: unless-stopped
 ```
 

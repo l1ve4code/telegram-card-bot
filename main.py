@@ -4,6 +4,8 @@ from telegram.ext import filters
 import sqlite3
 import os
 import time
+from os import environ
+from datetime import datetime, timedelta
 
 def create_database():
     conn = sqlite3.connect('discount_cards.db')
@@ -13,7 +15,21 @@ def create_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             name TEXT,
-            photo TEXT
+            photo TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            first_use TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_use TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS card_stats (
+            card_id INTEGER PRIMARY KEY,
+            selection_count INTEGER DEFAULT 0
         )
     ''')
     conn.commit()
@@ -21,7 +37,20 @@ def create_database():
 
 create_database()
 
+def update_user_stats(user_id):
+    conn = sqlite3.connect('discount_cards.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR IGNORE INTO users (user_id) VALUES (?)
+    ''', (user_id,))
+    cursor.execute('''
+        UPDATE users SET last_use = CURRENT_TIMESTAMP WHERE user_id = ?
+    ''', (user_id,))
+    conn.commit()
+    conn.close()
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_user_stats(update.message.from_user.id)
     welcome_text = """
     🌟 *Добро пожаловать в бота для обмена скидочными картами!* 🌟
     
@@ -46,6 +75,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    update_user_stats(user_id)
 
     timestamp = int(time.time())
     photo_path = f"photos/{user_id}_{timestamp}.jpg"
@@ -54,37 +84,48 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.makedirs("photos", exist_ok=True)
     await photo_file.download_to_drive(photo_path)
 
-    conn = sqlite3.connect('discount_cards.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO cards (user_id, photo)
-        VALUES (?, ?)
-    ''', (user_id, photo_path))
-    conn.commit()
-    conn.close()
+    context.user_data['photo_path'] = photo_path
 
     await update.message.reply_text("📸 Фотография сохранена. Теперь отправьте имя для этой карты.")
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    name = update.message.text
+    name = update.message.text.strip()
+    name_lower = name.lower()
 
     conn = sqlite3.connect('discount_cards.db')
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE cards
-        SET name = ?
-        WHERE user_id = ? AND name IS NULL
-    ''', (name, user_id))
+    cursor.execute('SELECT id FROM cards WHERE LOWER(name) = ?', (name_lower,))
+    existing_card = cursor.fetchone()
+
+    if existing_card:
+        card_id = existing_card[0]
+        cursor.execute('''
+            UPDATE cards
+            SET user_id = ?, photo = ?
+            WHERE id = ?
+        ''', (user_id, context.user_data['photo_path'], card_id))
+        await update.message.reply_text(f"✅ Карта '{name}' обновлена.")
+    else:
+        cursor.execute('''
+            INSERT INTO cards (user_id, name, photo)
+            VALUES (?, ?, ?)
+        ''', (user_id, name, context.user_data['photo_path']))
+        await update.message.reply_text(f"✅ Имя '{name}' успешно присвоено вашей карте.")
+
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(f"✅ Имя '{name}' успешно присвоено вашей карте.")
-
 async def list_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_user_stats(update.message.from_user.id)
     conn = sqlite3.connect('discount_cards.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name FROM cards')
+    cursor.execute('''
+        SELECT id, name FROM cards
+        WHERE id IN (
+            SELECT MAX(id) FROM cards GROUP BY LOWER(name)
+        )
+    ''')
     cards = cursor.fetchall()
     conn.close()
 
@@ -96,6 +137,102 @@ async def list_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text("📋 Выберите карту:", reply_markup=reply_markup)
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("🔒 Для доступа к статистике укажите пароль.")
+        return
+
+    user_password = context.args[0]
+    admin_password = environ.get("ADMIN_PASSWORD")
+
+    if user_password != admin_password:
+        await update.message.reply_text("❌ Неверный пароль.")
+        return
+
+    conn = sqlite3.connect('discount_cards.db')
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_users = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(DISTINCT user_id) FROM cards')
+    users_with_cards = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(*) FROM cards')
+    total_cards = cursor.fetchone()[0]
+
+    avg_cards_per_user = total_cards / users_with_cards if users_with_cards > 0 else 0
+
+    retention_period = 7
+    retention_date = datetime.now() - timedelta(days=retention_period)
+    cursor.execute('''
+        SELECT COUNT(DISTINCT user_id) FROM users
+        WHERE last_use >= ?
+    ''', (retention_date,))
+    retained_users = cursor.fetchone()[0]
+    retention_rate = (retained_users / total_users) * 100 if total_users > 0 else 0
+
+    cursor.execute('SELECT COUNT(DISTINCT user_id) FROM users WHERE last_use >= DATE("now", "-7 days")')
+    active_users_last_7_days = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(*) FROM users WHERE first_use >= DATE("now", "-7 days")')
+    new_users_last_7_days = cursor.fetchone()[0]
+
+    conversion_rate = (users_with_cards / total_users) * 100 if total_users > 0 else 0
+
+    cursor.execute('SELECT AVG(JULIANDAY(last_use) - JULIANDAY(first_use)) FROM users')
+    avg_usage_duration = cursor.fetchone()[0] or 0
+
+    cursor.execute('''
+        SELECT c.name, cs.selection_count 
+        FROM cards c
+        JOIN card_stats cs ON c.id = cs.card_id
+        ORDER BY cs.selection_count DESC
+        LIMIT 5
+    ''')
+    top_cards = cursor.fetchall()
+
+    cursor.execute('SELECT COUNT(*) FROM cards WHERE created_at >= DATE("now", "-7 days")')
+    cards_last_7_days = cursor.fetchone()[0]
+
+    cursor.execute('''
+        SELECT AVG(card_count) 
+        FROM (
+            SELECT user_id, COUNT(*) as card_count 
+            FROM cards 
+            GROUP BY user_id
+        )
+    ''')
+    avg_cards_per_active_user = cursor.fetchone()[0] or 0
+
+    stats_text = f"""
+    📊 *Статистика использования бота:*
+    
+    👤 *Всего пользователей:* {total_users}
+    📂 *Пользователей с картами:* {users_with_cards}
+    📦 *Всего карт:* {total_cards}
+    📈 *Среднее количество карт на пользователя:* {avg_cards_per_user:.2f}
+    📅 *Retention rate (за последние 7 дней):* {retention_rate:.2f}%
+    
+    🚀 *Активные пользователи (за последние 7 дней):* {active_users_last_7_days}
+    🆕 *Новые пользователи (за последние 7 дней):* {new_users_last_7_days}
+    🔄 *Конверсия в загрузку карт:* {conversion_rate:.2f}%
+    ⏳ *Среднее время между первым и последним использованием:* {avg_usage_duration:.2f} дней
+    
+    🏆 *Топ-5 популярных карт:*
+    """
+
+    for i, (name, count) in enumerate(top_cards, start=1):
+        stats_text += f"  {i}. {name} (выбрана {count} раз)\n"
+
+    stats_text += f"""
+    📅 *Карт загружено за последние 7 дней:* {cards_last_7_days}
+    📦 *Среднее количество карт на активного пользователя:* {avg_cards_per_active_user:.2f}
+    """
+    await update.message.reply_text(stats_text, parse_mode="Markdown")
+
+    conn.close()
 
 async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -115,10 +252,15 @@ async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_photo(open(card[0], 'rb'))
 
 def main():
-    application = Application.builder().token(os.getenv('BOT_TOKEN')).build()
+    bot_token = environ.get("BOT_TOKEN")
+    if not bot_token:
+        raise ValueError("Необходимо указать BOT_TOKEN в переменных окружения.")
+
+    application = Application.builder().token(bot_token).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("list", list_cards))
+    application.add_handler(CommandHandler("stats", stats))
 
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_name))
