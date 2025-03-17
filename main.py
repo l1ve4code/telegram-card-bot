@@ -228,12 +228,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """).strip()
 
     for i, (name, count) in enumerate(top_cards, start=1):
-        stats_text += f"\n  {i}. {name} (выбрана {count} раз)\n"
+        stats_text += f"\n {i}. {name} (выбрана {count} раз)"
 
-    stats_text += textwrap.dedent(f"""
+    stats_text += textwrap.dedent(f"""\n
     📅 *Карт загружено за последние 7 дней:* {cards_last_7_days}
     📦 *Среднее количество карт на активного пользователя:* {avg_cards_per_active_user:.2f}
-    """).strip()
+    """)
 
     await update.message.reply_text(stats_text, parse_mode="Markdown")
 
