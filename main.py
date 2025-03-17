@@ -8,8 +8,11 @@ import textwrap
 from os import environ
 from datetime import datetime, timedelta
 
+DATABASE_PATH = os.path.join("data", "discount_cards.db")
+
 def create_database():
-    conn = sqlite3.connect('discount_cards.db')
+    os.makedirs("data", exist_ok=True)
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS cards (
@@ -39,7 +42,7 @@ def create_database():
 create_database()
 
 def update_user_stats(user_id):
-    conn = sqlite3.connect('discount_cards.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT OR IGNORE INTO users (user_id) VALUES (?)
@@ -94,7 +97,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
     name_lower = name.lower()
 
-    conn = sqlite3.connect('discount_cards.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT id FROM cards WHERE LOWER(name) = ?', (name_lower,))
     existing_card = cursor.fetchone()
@@ -119,7 +122,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_user_stats(update.message.from_user.id)
-    conn = sqlite3.connect('discount_cards.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         SELECT id, name FROM cards
@@ -151,7 +154,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Неверный пароль.")
         return
 
-    conn = sqlite3.connect('discount_cards.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
 
     cursor.execute('SELECT COUNT(*) FROM users')
@@ -242,7 +245,7 @@ async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
     card_id = int(query.data.split("_")[1])
 
-    conn = sqlite3.connect('discount_cards.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('''
            INSERT OR IGNORE INTO card_stats (card_id) VALUES (?)

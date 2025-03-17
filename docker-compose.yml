@@ -8,5 +8,5 @@ services:
       - ADMIN_PASSWORD=your_admin_password
     volumes:
       - ./photos:/app/photos
-      - ./discount_cards.db:/app/discount_cards.db
+      - ./data:/app/data
     restart: unless-stopped
