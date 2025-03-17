@@ -1,0 +1,10 @@
+services:
+  discount-card-bot:
+    container_name: discount-card-bot
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - app-data:/app
+    environment:
+      - BOT_TOKEN=YOUR_BOT_TOKEN

@@ -1,9 +1,11 @@
-FROM python:3.10-slim
+FROM python:3.9-slim
 
 WORKDIR /app
 
-COPY . /app
+COPY requirements.txt .
 
-RUN pip install python-telegram-bot --upgrade && chmod a+x run.sh
+RUN pip install --no-cache-dir -r requirements.txt
 
-CMD ["./run.sh"]
+COPY . .
+
+CMD ["python", "main.py"]
