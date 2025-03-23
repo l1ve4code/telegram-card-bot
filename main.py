@@ -1,12 +1,12 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler
-from telegram.ext import filters
+from telegram import LabeledPrice, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters, \
+    CallbackQueryHandler
 import sqlite3
 import os
 import time
-import textwrap
 from os import environ
 from datetime import datetime, timedelta
+import textwrap
 
 DATABASE_PATH = os.path.join("data", "discount_cards.db")
 
@@ -36,10 +36,26 @@ def create_database():
             selection_count INTEGER DEFAULT 0
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS premium_users (
+            user_id INTEGER PRIMARY KEY,
+            premium_until TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
 
 create_database()
+
+def has_premium_access(user_id):
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT premium_until FROM premium_users WHERE user_id = ? AND premium_until >= CURRENT_TIMESTAMP
+    ''', (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
 
 def update_user_stats(user_id):
     conn = sqlite3.connect(DATABASE_PATH)
@@ -56,29 +72,74 @@ def update_user_stats(user_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_user_stats(update.message.from_user.id)
     welcome_text = textwrap.dedent("""
-    🌟 *Добро пожаловать в бота для обмена скидочными картами!* 🌟
-    
-    📸 *Как это работает?*
-    1. Отправьте мне *одну фотографию* вашей скидочной карты.
-    2. Присвойте карте *уникальное имя*, чтобы другие могли её найти.
-    3. Используйте команду `/list`, чтобы просмотреть все доступные карты.
-    4. Выберите карту из списка, и я отправлю вам её фотографию.
-    
-    💡 *Преимущества:*
-    - 🛍️ Обменивайтесь скидками с друзьями и коллегами.
-    - 📂 Удобное хранение всех карт в одном месте.
-    - 🔍 Быстрый поиск нужной карты.
-    
-    📌 *Доступные команды:*
-    - `/start` - показать это сообщение.
-    - `/list` - показать список всех карт.
-    
-    🚀 *Начните прямо сейчас!* Отправьте мне фотографию вашей скидочной карты.
+        🌟 *Добро пожаловать в премиальный клуб скидочных карт!* 🌟
+
+        📸 *Как это работает?*
+        1. Приобретите премиум-доступ, чтобы получить возможность загружать и просматривать скидочные карты.
+        2. Отправьте мне *одну фотографию* вашей скидочной карты.
+        3. Присвойте карте *уникальное имя*, чтобы другие могли её найти.
+        4. Используйте команду `/list`, чтобы просмотреть все доступные карты.
+        5. Выберите карту из списка, и я отправлю вам её фотографию.
+
+        💡 *Преимущества премиум-доступа:*
+        - 🛍️ Обменивайтесь скидками с друзьями и коллегами.
+        - 📂 Удобное хранение всех карт в одном месте.
+        - 🔍 Быстрый поиск нужной карты.
+
+        📌 *Доступные команды:*
+        - `/start` - показать это сообщение.
+        - `/list` - доступные карты.
+        - `/buy` - купить премиум-доступ.
     """).strip()
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
+async def start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    title = "Покупка премиум-доступа"
+    description = "Доступ к премиум-функциям бота на 1 месяц"
+    payload = "premium_subscription"
+    provider_token = ""
+    currency = "XTR"
+    prices = [LabeledPrice("Премиум-доступ", 300)]
+
+    await context.bot.send_invoice(
+        chat_id,
+        title,
+        description,
+        payload,
+        provider_token,
+        currency,
+        prices,
+    )
+
+async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    if query.invoice_payload == "premium_subscription":
+        await query.answer(ok=True)
+    else:
+        await query.answer(ok=False, error_message="Ошибка платежа")
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    premium_until = datetime.now() + timedelta(days=30)
+
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO premium_users (user_id, premium_until) VALUES (?, ?)
+    ''', (user_id, premium_until))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text("🎉 Спасибо за оплату! Ваш премиум-доступ активирован на 1 месяц.")
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+
+    if not has_premium_access(user_id):
+        await update.message.reply_text("❌ Для загрузки карт необходим премиум-доступ. Используйте команду /buy.")
+        return
+
     update_user_stats(user_id)
 
     timestamp = int(time.time())
@@ -94,6 +155,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+
+    if not has_premium_access(user_id):
+        await update.message.reply_text("❌ Для загрузки карт необходим премиум-доступ. Используйте команду /buy.")
+        return
+
     name = update.message.text.strip()
     name_lower = name.lower()
 
@@ -121,7 +187,13 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
 async def list_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.message.from_user.id)
+    user_id = update.message.from_user.id
+
+    if not has_premium_access(user_id):
+        await update.message.reply_text("❌ Для просмотра карт необходим премиум-доступ. Используйте команду /buy.")
+        return
+
+    update_user_stats(user_id)
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -141,6 +213,35 @@ async def list_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text("📋 Выберите карту:", reply_markup=reply_markup)
+
+async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    await update.message.reply_text(f"🆔 Ваш user_id: {user_id}")
+
+async def grant_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("❌ Используйте команду так: /grant_premium <user_id> <пароль>")
+        return
+
+    user_id = context.args[0]
+    password = context.args[1]
+    admin_password = environ.get("ADMIN_PASSWORD")
+
+    if password != admin_password:
+        await update.message.reply_text("❌ Неверный пароль.")
+        return
+
+    premium_until = datetime.now() + timedelta(days=30)
+
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO premium_users (user_id, premium_until) VALUES (?, ?)
+    ''', (user_id, premium_until))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"🎉 Пользователю с user_id `{user_id}` выдан премиум-доступ на 1 месяц.", parse_mode="Markdown")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -211,29 +312,29 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     avg_cards_per_active_user = cursor.fetchone()[0] or 0
 
     stats_text = textwrap.dedent(f"""
-    📊 *Статистика использования бота:*
-    
-    👤 *Всего пользователей:* {total_users}
-    📂 *Пользователей с картами:* {users_with_cards}
-    📦 *Всего карт:* {total_cards}
-    📈 *Среднее количество карт на пользователя:* {avg_cards_per_user:.2f}
-    📅 *Retention rate (за последние 7 дней):* {retention_rate:.2f}%
-    
-    🚀 *Активные пользователи (за последние 7 дней):* {active_users_last_7_days}
-    🆕 *Новые пользователи (за последние 7 дней):* {new_users_last_7_days}
-    🔄 *Конверсия в загрузку карт:* {conversion_rate:.2f}%
-    ⏳ *Среднее время между первым и последним использованием:* {avg_usage_duration:.2f} дней
-    
-    🏆 *Топ-5 популярных карт:*
+        📊 *Статистика использования бота:*
+
+        👤 *Всего пользователей:* {total_users}
+        📂 *Пользователей с картами:* {users_with_cards}
+        📦 *Всего карт:* {total_cards}
+        📈 *Среднее количество карт на пользователя:* {avg_cards_per_user:.2f}
+        📅 *Retention rate (за последние 7 дней):* {retention_rate:.2f}%
+
+        🚀 *Активные пользователи (за последние 7 дней):* {active_users_last_7_days}
+        🆕 *Новые пользователи (за последние 7 дней):* {new_users_last_7_days}
+        🔄 *Конверсия в загрузку карт:* {conversion_rate:.2f}%
+        ⏳ *Среднее время между первым и последним использованием:* {avg_usage_duration:.2f} дней
+
+        🏆 *Топ-5 популярных карт:*
     """).strip()
 
     for i, (name, count) in enumerate(top_cards, start=1):
-        stats_text += f"\n {i}. {name} (выбрана {count} раз)"
+        stats_text += f"\n  {i}. {name} (выбрана {count} раз)"
 
-    stats_text += textwrap.dedent(f"""\n
-    📅 *Карт загружено за последние 7 дней:* {cards_last_7_days}
-    📦 *Среднее количество карт на активного пользователя:* {avg_cards_per_active_user:.2f}
-    """)
+    stats_text += textwrap.dedent(f"""
+        📅 *Карт загружено за последние 7 дней:* {cards_last_7_days}
+        📦 *Среднее количество карт на активного пользователя:* {avg_cards_per_active_user:.2f}
+    """).strip()
 
     await update.message.reply_text(stats_text, parse_mode="Markdown")
 
@@ -248,11 +349,11 @@ async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TY
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-           INSERT OR IGNORE INTO card_stats (card_id) VALUES (?)
-       ''', (card_id,))
+        INSERT OR IGNORE INTO card_stats (card_id) VALUES (?)
+    ''', (card_id,))
     cursor.execute('''
-           UPDATE card_stats SET selection_count = selection_count + 1 WHERE card_id = ?
-       ''', (card_id,))
+        UPDATE card_stats SET selection_count = selection_count + 1 WHERE card_id = ?
+    ''', (card_id,))
     conn.commit()
 
     cursor.execute('SELECT photo FROM cards WHERE id = ?', (card_id,))
@@ -273,10 +374,16 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("list", list_cards))
+    application.add_handler(CommandHandler("buy", start_payment))
     application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("myid", my_id))
+    application.add_handler(CommandHandler("grant_premium", grant_premium))
 
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_name))
+
+    application.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
     application.add_handler(CallbackQueryHandler(handle_card_selection))
 
