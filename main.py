@@ -241,7 +241,7 @@ async def grant_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(f"🎉 Пользователю с user_id `{user_id}` выдан премиум-доступ на 1 месяц.", parse_mode="Markdown")
+    await update.message.reply_text(f"🎉 Пользователю с user_id {user_id} выдан премиум-доступ на 1 месяц.")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
