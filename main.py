@@ -275,8 +275,8 @@ async def delete_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Формат: /delete <имя_карты> <пароль>")
         return
 
-    card_name = " ".join(context.args[:-1])
-    password = context.args[-1]
+    *card_name_words, password = context.args
+    card_name = " ".join(card_name_words).strip()
     admin_password = environ.get("ADMIN_PASSWORD")
 
     if password != admin_password:
@@ -285,15 +285,23 @@ async def delete_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
+
+    cursor.execute('SELECT id FROM cards WHERE LOWER(name) = LOWER(?)', (card_name,))
+    card = cursor.fetchone()
+
+    if not card:
+        await update.message.reply_text(f"❌ Карта '{card_name}' не найдена.")
+        conn.close()
+        return
+
     cursor.execute('DELETE FROM cards WHERE LOWER(name) = LOWER(?)', (card_name,))
-    deleted_rows = cursor.rowcount
+    conn.commit()
+
+    cursor.execute('DELETE FROM card_stats WHERE card_id = ?', (card[0],))
     conn.commit()
     conn.close()
 
-    if deleted_rows > 0:
-        await update.message.reply_text(f"✅ Карта '{card_name}' удалена.")
-    else:
-        await update.message.reply_text(f"❌ Карта '{card_name}' не найдена.")
+    await update.message.reply_text(f"✅ Карта '{card_name}' удалена.")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
