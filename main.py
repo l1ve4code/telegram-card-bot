@@ -1,4 +1,4 @@
-from telegram import LabeledPrice, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import LabeledPrice, Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from telegram.ext import Application, CommandHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters, \
     CallbackQueryHandler
 import sqlite3
@@ -186,33 +186,60 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-async def list_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+async def list_cards(update_or_query, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+    if isinstance(update_or_query, CallbackQuery):
+        user_id = update_or_query.from_user.id
+        send_method = update_or_query.edit_message_text
+    else:
+        user_id = update_or_query.from_user.id
+        send_method = update_or_query.reply_text
 
     if not has_premium_access(user_id):
-        await update.message.reply_text("❌ Для просмотра карт необходим премиум-доступ. Используйте команду /buy.")
+        await send_method("❌ Для просмотра карт необходим премиум-доступ. Используйте команду /buy.")
         return
 
-    update_user_stats(user_id)
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         SELECT id, name FROM cards
-        WHERE id IN (
-            SELECT MAX(id) FROM cards GROUP BY LOWER(name)
-        )
-    ''')
+        WHERE id IN (SELECT MAX(id) FROM cards GROUP BY LOWER(name))
+        LIMIT 10 OFFSET ?
+    ''', (page * 10,))
     cards = cursor.fetchall()
     conn.close()
 
     if not cards:
-        await update.message.reply_text("📭 Пока нет доступных карт.")
+        await send_method("📭 Больше карт нет.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(card[1], callback_data=f"card_{card[0]}")] for card in cards
+    ]
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("← Назад", callback_data=f"list_{page - 1}"))
+    if len(cards) == 10:
+        nav_buttons.append(InlineKeyboardButton("Вперед →", callback_data=f"list_{page + 1}"))
+
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await send_method(
+        f"📋 Страница {page + 1}. Выберите карту:",
+        reply_markup=reply_markup
+    )
+
+async def handle_list_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data.startswith("list_"):
+        page = int(query.data.split("_")[1])
+        await list_cards(query, context, page)
     else:
-        keyboard = [
-            [InlineKeyboardButton(card[1], callback_data=f"card_{card[0]}")] for card in cards
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("📋 Выберите карту:", reply_markup=reply_markup)
+        await handle_card_selection(update, context)
 
 async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -242,6 +269,31 @@ async def grant_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text(f"🎉 Пользователю с user_id {user_id} выдан премиум-доступ на 1 месяц.")
+
+async def delete_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("❌ Формат: /delete <имя_карты> <пароль>")
+        return
+
+    card_name = " ".join(context.args[:-1])
+    password = context.args[-1]
+    admin_password = environ.get("ADMIN_PASSWORD")
+
+    if password != admin_password:
+        await update.message.reply_text("❌ Неверный пароль.")
+        return
+
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM cards WHERE LOWER(name) = LOWER(?)', (card_name,))
+    deleted_rows = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    if deleted_rows > 0:
+        await update.message.reply_text(f"✅ Карта '{card_name}' удалена.")
+    else:
+        await update.message.reply_text(f"❌ Карта '{card_name}' не найдена.")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -311,11 +363,23 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ''')
     avg_cards_per_active_user = cursor.fetchone()[0] or 0
 
+    cursor.execute('SELECT COUNT(DISTINCT user_id) FROM premium_users')
+    premium_users = cursor.fetchone()[0]
+
+    premium_conversion = (premium_users / total_users) * 100 if total_users > 0 else 0
+
+    cursor.execute('SELECT COUNT(*) FROM premium_users WHERE premium_until >= CURRENT_TIMESTAMP')
+    active_premium_users = cursor.fetchone()[0]
+
     stats_text = textwrap.dedent(f"""
         📊 *Статистика использования бота:*
 
         👤 *Всего пользователей:* {total_users}
         📂 *Пользователей с картами:* {users_with_cards}
+        💎 Пользователей с премиумом: {premium_users}
+        🚀 Конверсия в премиум: {premium_conversion:.2f}%
+        💎 Активных премиум-подписок: {active_premium_users}
+        
         📦 *Всего карт:* {total_cards}
         📈 *Среднее количество карт на пользователя:* {avg_cards_per_user:.2f}
         📅 *Retention rate (за последние 7 дней):* {retention_rate:.2f}%
@@ -373,11 +437,12 @@ def main():
     application = Application.builder().token(bot_token).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("list", list_cards))
+    application.add_handler(CommandHandler("list", lambda u, c: list_cards(u.message, c, page=0)))
     application.add_handler(CommandHandler("buy", start_payment))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("myid", my_id))
     application.add_handler(CommandHandler("grant_premium", grant_premium))
+    application.add_handler(CommandHandler("delete", delete_card))
 
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_name))
@@ -385,7 +450,7 @@ def main():
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    application.add_handler(CallbackQueryHandler(handle_card_selection))
+    application.add_handler(CallbackQueryHandler(handle_list_pagination))
 
     application.run_polling()
 
