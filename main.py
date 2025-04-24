@@ -57,6 +57,16 @@ def has_premium_access(user_id):
     conn.close()
     return result is not None
 
+def was_premium_access(user_id):
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT premium_until FROM premium_users WHERE user_id = ?
+    ''', (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
+
 def update_user_stats(user_id):
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
@@ -83,7 +93,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     premium_until = datetime.now() + timedelta(days=30)
 
     update_user_stats(user_id)
-    add_premium(user_id, premium_until)
+    if not was_premium_access(user_id):
+        add_premium(user_id, premium_until)
 
     welcome_text = textwrap.dedent("""
         🌟 *Добро пожаловать в премиальный клуб скидочных карт!* 🌟
