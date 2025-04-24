@@ -69,8 +69,22 @@ def update_user_stats(user_id):
     conn.commit()
     conn.close()
 
+def add_premium(user_id, premium_until):
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+            INSERT OR REPLACE INTO premium_users (user_id, premium_until) VALUES (?, ?)
+        ''', (user_id, premium_until))
+    conn.commit()
+    conn.close()
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.message.from_user.id)
+    user_id = update.message.from_user.id
+    premium_until = datetime.now() + timedelta(days=30)
+
+    update_user_stats(user_id)
+    add_premium(user_id, premium_until)
+
     welcome_text = textwrap.dedent("""
         🌟 *Добро пожаловать в премиальный клуб скидочных карт!* 🌟
 
@@ -93,6 +107,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """).strip()
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
+async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    info_text = textwrap.dedent("""
+        📸 *Как это работает?*
+        1. Приобретите премиум-доступ, чтобы получить возможность загружать и просматривать скидочные карты.
+        2. Отправьте мне *одну фотографию* вашей скидочной карты.
+        3. Присвойте карте *уникальное имя*, чтобы другие могли её найти.
+        4. Используйте команду /list, чтобы просмотреть все доступные карты.
+        5. Выберите карту из списка, и я отправлю вам её фотографию.
+
+        📌 *Доступные команды:*
+        - /start - показать это сообщение.
+        - /list - доступные карты.
+        - /buy - купить премиум-доступ.
+    """).strip()
+    await update.message.reply_text(info_text, parse_mode="Markdown")
+
 async def start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     title = "Покупка премиум-доступа"
@@ -100,7 +130,7 @@ async def start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = "premium_subscription"
     provider_token = ""
     currency = "XTR"
-    prices = [LabeledPrice("Премиум-доступ", 300)]
+    prices = [LabeledPrice("Премиум-доступ", 150)]
 
     await context.bot.send_invoice(
         chat_id,
@@ -122,15 +152,7 @@ async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     premium_until = datetime.now() + timedelta(days=30)
-
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO premium_users (user_id, premium_until) VALUES (?, ?)
-    ''', (user_id, premium_until))
-    conn.commit()
-    conn.close()
-
+    add_premium(user_id, premium_until)
     await update.message.reply_text("🎉 Спасибо за оплату! Ваш премиум-доступ активирован на 1 месяц.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -445,6 +467,7 @@ def main():
     application = Application.builder().token(bot_token).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("info", info))
     application.add_handler(CommandHandler("list", lambda u, c: list_cards(u.message, c, page=0)))
     application.add_handler(CommandHandler("buy", start_payment))
     application.add_handler(CommandHandler("stats", stats))
