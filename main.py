@@ -465,6 +465,23 @@ async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await query.message.reply_photo(open(card[0], 'rb'))
 
+async def load_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+        
+    load_instructions = textwrap.dedent("""
+    📸 *Как загрузить карту:*
+    
+    1️⃣ Отправьте фотографию карты
+    2️⃣ После загрузки фото, отправьте название карты
+    
+    💡 *Советы:*
+    - Убедитесь, что фото четкое и хорошо читаемое
+    - Название должно быть понятным и уникальным
+    - Можно использовать существующее название для обновления карты
+    """).strip()
+    
+    await update.message.reply_text(load_instructions, parse_mode="Markdown")
+
 def main():
     bot_token = environ.get("BOT_TOKEN")
     if not bot_token:
@@ -475,6 +492,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("info", info))
     application.add_handler(CommandHandler("list", lambda u, c: list_cards(u.message, c, page=0)))
+    application.add_handler(CommandHandler("load", load_command))
     application.add_handler(CommandHandler("buy", start_payment))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("myid", my_id))
