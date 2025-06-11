@@ -42,6 +42,14 @@ def create_database():
             premium_until TIMESTAMP
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS card_views (
+            user_id INTEGER,
+            month_year TEXT,
+            views_count INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, month_year)
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -222,8 +230,12 @@ async def list_cards(update_or_query, context: ContextTypes.DEFAULT_TYPE, page: 
         user_id = update_or_query.from_user.id
         send_method = update_or_query.reply_text
 
-    if not has_premium_access(user_id):
-        await send_method("❌ Для просмотра карт необходим премиум-доступ. Используйте команду /buy.")
+    if not can_view_more_cards(user_id):
+        remaining_views = 5 - get_user_monthly_views(user_id)
+        await send_method(
+            f"❌ Вы достигли лимита просмотров карт на этот месяц ({5 - remaining_views}/5).\n"
+            "Для неограниченного доступа к картам используйте команду /buy"
+        )
         return
 
     conn = sqlite3.connect(DATABASE_PATH)
@@ -253,9 +265,12 @@ async def list_cards(update_or_query, context: ContextTypes.DEFAULT_TYPE, page: 
     if nav_buttons:
         keyboard.append(nav_buttons)
 
+    remaining_views = 5 - get_user_monthly_views(user_id)
+    views_info = f"\n\n👁 Осталось просмотров в этом месяце: {remaining_views}/5" if not has_premium_access(user_id) else ""
+
     reply_markup = InlineKeyboardMarkup(keyboard)
     await send_method(
-        f"📋 Страница {page + 1}. Выберите карту:",
+        f"📋 Страница {page + 1}. Выберите карту:{views_info}",
         reply_markup=reply_markup
     )
 
@@ -444,7 +459,16 @@ async def handle_card_selection(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
+    user_id = query.from_user.id
+    if not can_view_more_cards(user_id):
+        await query.edit_message_text(
+            f"❌ Вы достигли лимита просмотров карт на этот месяц.\n"
+            "Для неограниченного доступа к картам используйте команду /buy"
+        )
+        return
+
     card_id = int(query.data.split("_")[1])
+    increment_user_views(user_id)
 
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
@@ -481,6 +505,53 @@ async def load_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """).strip()
     
     await update.message.reply_text(load_instructions, parse_mode="Markdown")
+
+def get_current_month_year():
+    return datetime.now().strftime("%Y-%m")
+
+def get_user_monthly_views(user_id):
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    current_month = get_current_month_year()
+    
+    cursor.execute('''
+        SELECT views_count FROM card_views 
+        WHERE user_id = ? AND month_year = ?
+    ''', (user_id, current_month))
+    result = cursor.fetchone()
+    
+    if result is None:
+        cursor.execute('''
+            INSERT INTO card_views (user_id, month_year, views_count)
+            VALUES (?, ?, 0)
+        ''', (user_id, current_month))
+        conn.commit()
+        views = 0
+    else:
+        views = result[0]
+    
+    conn.close()
+    return views
+
+def increment_user_views(user_id):
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    current_month = get_current_month_year()
+    
+    cursor.execute('''
+        INSERT INTO card_views (user_id, month_year, views_count)
+        VALUES (?, ?, 1)
+        ON CONFLICT(user_id, month_year) 
+        DO UPDATE SET views_count = views_count + 1
+    ''', (user_id, current_month))
+    
+    conn.commit()
+    conn.close()
+
+def can_view_more_cards(user_id):
+    if has_premium_access(user_id):
+        return True
+    return get_user_monthly_views(user_id) < 5
 
 def main():
     bot_token = environ.get("BOT_TOKEN")
