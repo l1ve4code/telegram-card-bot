@@ -553,6 +553,27 @@ def can_view_more_cards(user_id):
         return True
     return get_user_monthly_views(user_id) < 5
 
+async def revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("❌ Используйте команду так: /revoke_premium <user_id> <пароль>")
+        return
+
+    user_id = context.args[0]
+    password = context.args[1]
+    admin_password = environ.get("ADMIN_PASSWORD")
+
+    if password != admin_password:
+        await update.message.reply_text("❌ Неверный пароль.")
+        return
+
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM premium_users WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"✅ Премиум-доступ для пользователя {user_id} успешно отозван.")
+
 def main():
     bot_token = environ.get("BOT_TOKEN")
     if not bot_token:
@@ -568,6 +589,7 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("myid", my_id))
     application.add_handler(CommandHandler("grant_premium", grant_premium))
+    application.add_handler(CommandHandler("revoke_premium", revoke_premium))
     application.add_handler(CommandHandler("delete", delete_card))
 
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
